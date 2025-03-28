@@ -8,22 +8,44 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
 from moment.common import PATHS
-
+from .folder_walking import list_files_recursively, FileEntry
 from .base import DataSplits, TaskDataset, TimeseriesData
+import random
 
 warnings.filterwarnings("ignore")
 
 DATA_COLLECTIONS = ["TSB-UAD-Artificial", "TSB-UAD-Public", "TSB-UAD-Synthetic"]
 
 
-def get_anomaly_detection_datasets(collection: str = "TSB-UAD-Public"):
+def get_anomaly_detection_datasets(
+    collection: str = "TSB-UAD-Public",
+    max_files: Optional[int] = None,
+    seed: Optional[int] = None,
+) -> List[FileEntry]:
     data_dir = os.path.join(PATHS.DATA_DIR, "anomaly_detection", collection)
-    datasets = []
-    for root, dirs, files in os.walk(data_dir):
-        for file in files:
-            if file.endswith(".out") and "train" not in file:
-                datasets.append(os.path.join(root, file))
+    
+    # Old code
+    # TODO: Remove this
+    # datasets = []
+    # for root, dirs, files in os.walk(data_dir):
+    #     for file in files:
+    #         if file.endswith(".out") and "train" not in file:
+    #             datasets.append(os.path.join(root, file))
+    
+    all_files = list_files_recursively(data_dir)
+    datasets = [
+        file for file in all_files if \
+        file.extension == ".out" and "train" not in file.path[len(data_dir):]
+    ]
 
+    if seed is not None:
+        random.seed(seed)
+    
+    random.shuffle(datasets)
+
+    if max_files is not None:
+        datasets = datasets[:max_files]
+    
     return datasets
 
 

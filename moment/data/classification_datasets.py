@@ -1,7 +1,7 @@
 import logging
 import os
 import warnings
-from typing import Optional
+from typing import Optional, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +17,8 @@ from moment.utils.data import (
 )
 
 from .base import DataSplits, TaskDataset, TimeseriesData
+from .folder_walking import list_files_recursively, FileEntry
+import random
 
 warnings.filterwarnings("ignore")
 
@@ -60,24 +62,51 @@ DATASETS_WITHOUT_NORMALIZATION = [
 ]
 
 
-def get_classification_datasets(collection: str = "UCR", subset: Optional[str] = None):
+def get_classification_datasets(
+    collection: str = "UCR", 
+    subset: Optional[str] = None,
+    max_files: Optional[int] = None,
+    seed: Optional[int] = None,
+) -> List[FileEntry]:
+    all_files = list_files_recursively(os.path.join(PATHS.DATA_DIR, "classification", collection))
+    
+    
+    
+    
+    
     data_dir = os.path.join(PATHS.DATA_DIR, "classification", collection)
-    datasets = []
-    for root, dirs, files in os.walk(data_dir):
-        for file in files:
-            if file.endswith(".ts") and "TRAIN" not in file:
-                datasets.append(os.path.join(root, file))
+    datasets : List[FileEntry] = []
+    # for root, dirs, files in os.walk(data_dir):
+    #     for file in files:
+    #         if file.endswith(".ts") and "TRAIN" not in file:
+    #             datasets.append(os.path.join(root, file))
+
+    for file in all_files:
+        if file.extension == ".ts" and "TRAIN" not in file.path:
+            datasets.append(file)
 
     remove_datasets = ["CharacterTrajectories_TEST.ts"]
     datasets = [
-        dataset for dataset in datasets if dataset.split("/")[-1] not in remove_datasets
+        dataset for dataset in datasets \
+            if dataset.path.split("/")[-1] not in remove_datasets
     ]
+    
     if subset == "univariate":
         summary = pd.read_csv("~/MOMENT/assets/data/summaryUnivariate.csv")
         univariate_datasets = summary.problem.tolist()
         datasets = [
-            i for i in datasets if i.split("/")[-2].strip() in univariate_datasets
+            dataset for dataset in datasets \
+                if dataset.path.split("/")[-2].strip() in univariate_datasets
         ]
+    
+    if seed is not None:
+        random.seed(seed)
+    
+    random.shuffle(datasets)
+    
+    if max_files is not None:
+        datasets = datasets[:max_files]    
+    
     return datasets
 
 
@@ -127,7 +156,7 @@ class ClassificationDataset(TaskDataset):
             target column must be specified or the dataset
             is flattened along the channel dimension.
         """
-
+        
         self.seq_len = seq_len
         self.full_file_path_and_name = full_file_path_and_name
         self.dataset_name = full_file_path_and_name.split("/")[-2]

@@ -1,6 +1,6 @@
 import os
 import warnings
-from typing import Optional
+from typing import Optional, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,6 +13,8 @@ from moment.data.load_data import convert_tsf_to_dataframe
 from moment.utils.data import downsample_timeseries, upsample_timeseries
 
 from .base import DataSplits, TaskDataset, TimeseriesData
+from .folder_walking import list_files_recursively, FileEntry
+import random
 
 warnings.filterwarnings("ignore")
 
@@ -27,14 +29,38 @@ DATASETS_EPIDEMIC = ["EU-Flu", "ILI-US"]
 DATASETS_EXTENSIONS = [".tsf", ".csv", ".npy"]
 
 
-def get_forecasting_datasets(collection: str) -> list[str]:
+def get_forecasting_datasets(
+    collection: str,
+    max_files: Optional[int] = None,
+    seed: Optional[int] = None,
+) -> List[FileEntry]:
     data_dir = os.path.join(PATHS.DATA_DIR, "forecasting", collection)
-    datasets = []
-    for root, dirs, files in os.walk(data_dir):
-        for f in files:
-            if any(f.endswith(ext) for ext in DATASETS_EXTENSIONS):
-                if "meta" not in f:  # exclude dataset meta data
-                    datasets.append(os.path.join(root, f))
+    datasets : List[FileEntry] = []
+    
+    all_files = list_files_recursively(data_dir)
+    
+    
+    
+    
+    for file in all_files:
+        if file.extension in DATASETS_EXTENSIONS and "meta" not in file.path[len(data_dir):]:
+            datasets.append(file)
+    
+    # for root, dirs, files in os.walk(data_dir):
+    #     for f in files:
+    #         if any(f.endswith(ext) for ext in DATASETS_EXTENSIONS):
+    #             if "meta" not in f:  # exclude dataset meta data
+    #                 datasets.append(os.path.join(root, f))
+    
+    if seed is not None:
+        random.seed(seed)
+        
+    random.shuffle(datasets)
+    
+    if max_files is not None:
+        datasets = datasets[:max_files]
+    
+    
     return datasets
 
 
