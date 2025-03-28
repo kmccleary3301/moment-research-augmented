@@ -1,0 +1,142 @@
+#Experiment parameters
+random_seed: 13
+notes: "Pre-training run with reduced dataset"
+
+# Encoder (MOMENT) parameters
+task_name: "pre-training" 
+
+# Model parameters
+
+
+# MOMENT parameters
+model_name: "MOMENT"
+seq_len: 512
+patch_len: 8
+patch_stride_len: 8
+revin_affine: False
+d_model: 512
+e_layers: 6
+dropout: 0.1
+attention_dropout: 0.1
+output_attention: False
+n_heads: 8
+d_ff: 2048
+activation: "relu"
+
+
+torch_dtype: "bfloat16"
+value_embedding_bias: False # Whether to add biases to the value embeddings
+orth_gain: 1.41
+add_positional_embedding: False # Wheter to add positional embedding to the input
+set_input_mask: True # Whether to set the input mask
+randomly_initialize_backbone: True # Whether to randomly initialize the encoder
+transformer_type: "encoder_only" # "encoder_decoder" "encoder_only" "decoder_only"
+# transformer_backbone: 'google/flan-t5-large' # "PatchTST" "google/flan-t5-base" "t5-large"
+transformer_backbone: 'google/flan-t5-small' # "PatchTST" "google/flan-t5-base" "t5-large"
+# transformer_backbone: "PatchTST"
+freeze_transformer_backbone: False # Whether to freeze the transformer backbone
+
+
+
+# # TinyTimeMixer parameters
+# model_name: "TinyTimeMixer"
+# seq_len: 512
+# patch_len: 8
+# patch_stride_len: 8
+# revin_affine: False
+# d_model: 512
+# # e_layers: 6
+# # dropout: 0.1
+# # attention_dropout: 0.1
+# # output_attention: False
+# # n_heads: 8
+# # d_ff: 2048
+# # activation: "relu"
+
+
+# # --- Model Parameters ---
+# model_name: "AugmentedTTM" # Changed from TinyTimeMixer to reflect the new model
+
+# # Core Architecture (Shared / TTM Base)
+# seq_len: 512                  # Input sequence length (context_length)
+# patch_len: 8                  # Patch length
+# patch_stride_len: 8           # Stride (non-overlapping)
+# num_input_channels: 512         # *** IMPORTANT: Set this to the actual number of channels in your dataset ***
+#                               # (Using 7 as a placeholder based on ETT datasets)
+# d_model: 512                  # Dimension of patch embeddings and backbone hidden states
+# num_layers: 6                 # Number of TinyTimeMixer blocks in the encoder (Backbone)
+# expansion_factor: 2           # Expansion factor in TTM MLP layers
+# dropout: 0.1                  # General dropout rate within TTM blocks
+# mode: "common_channel"        # TTM channel mixing mode ('common_channel' or 'mix_channel')
+# gated_attn: True              # Whether to use Gated Attention in TTM blocks
+# norm_mlp: "LayerNorm"         # Normalization type within TTM MLP blocks ('LayerNorm', 'BatchNorm', 'None')
+
+# # Normalization & Embedding
+# use_revin: True               # Use RevIN normalization (recommended for pre-training)
+# revin_affine: False           # Use affine parameters in RevIN
+# use_positional_encoding: True # Whether to add positional embedding (like TTM)
+# # value_embedding_bias: False # Kept default (False in AugTTM code)
+# # orth_gain: -1              # Kept default (disabled in AugTTM code)
+
+# # Heads Configuration
+# head_dropout: 0.1             # Dropout rate specifically for the heads
+# forecast_horizon: 96          # Needed to initialize forecasting head (even if not used in pretrain)
+# n_classes: 2                  # Needed to initialize classification head (even if not used in pretrain)
+
+
+
+# torch_dtype: "bfloat16"
+# value_embedding_bias: False # Whether to add biases to the value embeddings
+# orth_gain: 1.41
+# add_positional_embedding: False # Wheter to add positional embedding to the input
+# set_input_mask: True # Whether to set the input mask
+# randomly_initialize_backbone: True # Whether to randomly initialize the encoder
+# transformer_type: "encoder_only" # "encoder_decoder" "encoder_only" "decoder_only"
+# # transformer_backbone: 'google/flan-t5-large' # "PatchTST" "google/flan-t5-base" "t5-large"
+# transformer_backbone: 'google/flan-t5-small' # "PatchTST" "google/flan-t5-base" "t5-large"
+# # transformer_backbone: "PatchTST"
+# freeze_transformer_backbone: False # Whether to freeze the transformer backbone
+
+
+# Logging
+log_interval: 500  # Reduced from 100000
+checkpoint_interval: 500  # Reduced from 5000
+debug: True  # Changed from False to True to get more debug information
+
+# Training parameters
+mask_ratio: 0.3
+optimizer_name: AdamW
+enable_gradient_checkpointing: True
+max_norm: 1.0
+weight_decay: 0.05
+lr_scheduler_type: linearwarmupcosinelr
+init_lr: 0.00005
+min_lr: 0.000005
+lr_decay_rate: 0.9
+warmup_lr: 0.000005
+warmup_steps: 200
+use_amp: True
+# max_opt_steps: 5000  # Reduced from 5000000
+max_epoch: 1  # Reduced from 50
+
+# Dataset parameters
+target_col : 'OT'
+scale : True
+data_stride_len : 1 
+train_ratio : 0.6
+val_ratio : 0.1
+test_ratio : 0.3
+upsampling_pad_direction : "backward"
+upsampling_type : "pad"
+downsampling_type : "interpolate"
+pad_mode : "constant"
+pad_constant_values : 0
+dataset_names : 'all'
+datasets_fraction : 1.00
+train_batch_size : 512  # Reduced from 2048
+val_batch_size: 768  # Reduced from 3072
+shuffle : True
+num_workers : 5
+pin_memory : True
+drop_last : False
+seed: 42

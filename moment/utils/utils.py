@@ -18,7 +18,14 @@ class NamespaceWithDefaults(Namespace):
 
     def getattr(self, key, default=None):
         return getattr(self, key, default)
-
+    
+    
+    def to_json(self):
+        return {
+            k: v for k, v in vars(self).items() \
+                # Exclude functions
+                if not callable(v)
+        }
 
 def parse_config(config: dict) -> NamespaceWithDefaults:
     args = NamespaceWithDefaults(**config)

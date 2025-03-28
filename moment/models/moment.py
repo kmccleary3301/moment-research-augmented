@@ -18,6 +18,8 @@ from moment.utils.utils import (
 
 from .layers.embed import PatchEmbedding, Patching
 from .layers.revin import RevIN
+from .layers.simple_sparse_attention import SimpleSparseAttention
+from native_sparse_attention_pytorch import SparseAttention
 
 SUPPORTED_HUGGINGFACE_MODELS = [
     "t5-small",
@@ -31,6 +33,133 @@ SUPPORTED_HUGGINGFACE_MODELS = [
     "google/flan-t5-xl",
     "google/flan-t5-xxl",
 ]
+
+
+
+class SparseAttentionEncoder(nn.Module):
+    """
+    Wrapper for T5 encoder that replaces standard attention with SparseAttention.
+    """
+    def __init__(self, t5_encoder, d_model, num_heads, sparse_attention_params=None):
+        super().__init__()
+        self.t5_encoder = t5_encoder
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.sparse_attention_params = sparse_attention_params or {}
+        self.using_sparse_attention = False
+        self.using_simple_sparse_attention = False
+        
+        # Default parameters
+        dim_head = d_model // num_heads
+        default_params = {
+            'dim': d_model,
+            'dim_head': dim_head,
+            'heads': num_heads,
+            'sliding_window_size': 16,
+            'compress_block_size': 16,
+            'compress_block_sliding_stride': 16,
+            'selection_block_size': 16,
+            'num_selected_blocks': 2
+        }
+        
+        # Merge default params with provided params
+        sparse_params = {**default_params, **self.sparse_attention_params}
+        
+        # Try to use native_sparse_attention_pytorch if available
+        try:
+            
+            
+            # Check if RMSNorm is available (required by SparseAttention)
+            has_rms_norm = hasattr(nn, 'RMSNorm')
+            if not has_rms_norm:
+                logging.warning("torch.nn.RMSNorm not found. Falling back to SimpleSparseAttention.")
+                raise ImportError("Missing torch.nn.RMSNorm dependency")
+            
+            self.sparse_attention = SparseAttention(**sparse_params)
+            self.using_sparse_attention = True
+            logging.info("Using native SparseAttention module")
+        
+            # Replace attention in T5 layers
+            for layer in self.t5_encoder.block:
+                # Save original attention for fallback
+                
+                # Create a custom attention class that delegates to SparseAttention
+                class NativeSparseAttentionWrapper(nn.Module):
+                    def __init__(self, sparse_attn):
+                        super().__init__()
+                        self.sparse_attn = sparse_attn
+                        
+                    def forward(self, hidden_states, attention_mask=None, position_bias=None, **kwargs):
+                        # Adapt input format for SparseAttention
+                        if attention_mask is not None:
+                            # Modify attention mask format if needed
+                            # This depends on the specific format SparseAttention expects
+                            pass
+                        
+                        output = self.sparse_attn(hidden_states)
+                        # Return format expected by T5: (output, None, position_bias)
+                        # We forward the position_bias as received
+                        return (output, None, position_bias)
+                
+                # Replace the attention module
+                layer.layer[0].SelfAttention = NativeSparseAttentionWrapper(self.sparse_attention)
+                
+        except ImportError as e:
+            logging.warning(f"native_sparse_attention_pytorch module not found or has missing dependencies: {e}. Using SimpleSparseAttention.")
+            self._setup_simple_sparse_attention(sparse_params)
+    
+    def _setup_simple_sparse_attention(self, sparse_params):
+        """Setup our own implementation of sparse attention"""
+        # Use our custom SimpleSparseAttention implementation as fallback
+        simple_params = {
+            'dim': sparse_params['dim'],
+            'dim_head': sparse_params['dim_head'],
+            'heads': sparse_params['heads'],
+            'sliding_window_size': sparse_params.get('sliding_window_size', 16),
+            'top_k_ratio': 0.1,  # Approximate sparsity level
+            'dropout': 0.0
+        }
+        
+        self.simple_sparse_attention = SimpleSparseAttention(**simple_params)
+        self.using_simple_sparse_attention = True
+        logging.info("Using SimpleSparseAttention fallback module")
+        
+        # Replace attention in T5 layers
+        for layer in self.t5_encoder.block:
+            # Save original attention for ultimate fallback
+            layer.original_attention = layer.layer[0].SelfAttention
+            
+            # Create a custom attention class that delegates to SimpleSparseAttention
+            class SimpleSparseAttentionWrapper(nn.Module):
+                def __init__(self, sparse_attn):
+                    super().__init__()
+                    self.sparse_attn = sparse_attn
+                    
+                def forward(self, hidden_states, attention_mask=None, position_bias=None, **kwargs):
+                    # Convert attention_mask from T5 format if needed
+                    mask_for_sparse = None
+                    if attention_mask is not None:
+                        # T5 uses extended attention mask: [batch_size, 1, 1, seq_len]
+                        # Our SimpleSparseAttention expects: [batch_size, seq_len]
+                        if attention_mask.dim() == 4:
+                            mask_for_sparse = attention_mask.squeeze(1).squeeze(1)
+                        else:
+                            mask_for_sparse = attention_mask
+                            
+                    # Try using simple sparse attention
+                    output = self.sparse_attn(hidden_states, mask=mask_for_sparse)
+                    
+                    # Return format expected by T5: (output, None, position_bias)
+                    # We forward the position_bias as received
+                    return (output, None, position_bias)
+            
+            # Replace the attention module
+            layer.layer[0].SelfAttention = SimpleSparseAttentionWrapper(self.simple_sparse_attention)
+        
+    
+    def forward(self, inputs_embeds, attention_mask=None, **kwargs):
+        return self.t5_encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs)
+
 
 
 class PretrainHead(nn.Module):
@@ -110,6 +239,12 @@ class ForecastingHead(nn.Module):
 
 
 class MOMENT(nn.Module):
+    VALID_BACKBONES = [
+        "PatchTST", 
+        "SparseAttentionEncoder"
+    ]
+    
+    
     def __init__(self, configs: Namespace | dict, **kwargs: dict):
         super().__init__()
         configs = self._update_inputs(configs, **kwargs)
@@ -160,7 +295,7 @@ class MOMENT(nn.Module):
             warnings.warn("PatchTST only supports encoder-only transformer backbones.")
             configs.transformer_type = "encoder_only"
         if (
-            configs.transformer_backbone != "PatchTST"
+            configs.transformer_backbone not in self.VALID_BACKBONES
             and configs.transformer_backbone not in SUPPORTED_HUGGINGFACE_MODELS
         ):
             raise NotImplementedError(
@@ -236,23 +371,48 @@ class MOMENT(nn.Module):
     def _get_transformer_backbone(self, configs):
         if configs.transformer_backbone == "PatchTST":
             return self._get_patchtst_encoder(configs)
+        elif configs.transformer_backbone == "SparseAttentionEncoder":
+            # Get number of heads from config
+            num_heads = configs.n_heads
+            d_model = configs.d_model
+            
+            # Get custom sparse attention parameters if provided
+            sparse_attention_params = configs.getattr("sparse_attention_params", {})
+            
+            base_transformer_backbone = self._get_huggingface_transformer(configs, hf_id=configs.original_transformer_backbone)
+            
+            
+            # Wrap the transformer backbone with our SparseAttentionEncoder
+            transformer_backbone = SparseAttentionEncoder(
+                base_transformer_backbone,
+                d_model=d_model,
+                num_heads=num_heads,
+                sparse_attention_params=sparse_attention_params
+            )
+            logging.info("Using SparseAttention in transformer backbone.")
+            return transformer_backbone
         else:
             return self._get_huggingface_transformer(configs)
 
-    def _get_huggingface_transformer(self, configs):
+    def _get_huggingface_transformer(self, configs, hf_id=None):
         from transformers import T5Config, T5EncoderModel, T5Model
 
+        if hf_id is None:
+            hf_id = configs.transformer_backbone
+            
+
+
         if configs.getattr("randomly_initialize_backbone", False):
-            model_config = T5Config.from_pretrained(configs.transformer_backbone)
+            model_config = T5Config.from_pretrained(hf_id)
             transformer_backbone = T5Model(model_config)
             logging.info(f"Initializing randomly initialized\
                           transformer from {configs.transformer_backbone}.")
         else:
             transformer_backbone = T5EncoderModel.from_pretrained(
-                configs.transformer_backbone
+                hf_id
             )
             logging.info(f"Initializing pre-trained \
-                          transformer from {configs.transformer_backbone}.")
+                          transformer from {hf_id}.")
 
         if configs.transformer_type == "encoder_only":
             transformer_backbone = transformer_backbone.get_encoder()
@@ -262,7 +422,7 @@ class MOMENT(nn.Module):
         if configs.getattr("enable_gradient_checkpointing", True):
             transformer_backbone.gradient_checkpointing_enable()
             logging.info("Enabling gradient checkpointing.")
-
+        
         return transformer_backbone
 
     def _get_patchtst_encoder(self, configs):
@@ -281,9 +441,9 @@ class MOMENT(nn.Module):
                         configs.n_heads,
                     ),
                     configs.d_model,
-                    configs.d_ff,
-                    dropout=configs.dropout,
-                    activation=configs.activation,
+                    d_ff=getattr(configs, "d_ff", 2048),
+                    dropout=getattr(configs, "dropout", 0.1),
+                    activation=getattr(configs, "activation", "relu"),
                 )
                 for l in range(configs.e_layers)
             ],
@@ -371,7 +531,7 @@ class MOMENT(nn.Module):
         if mask is None:
             mask = self.mask_generator.generate_mask(x=x_enc, input_mask=input_mask)
             mask = mask.to(x_enc.device)  # mask: [batch_size x seq_len]
-
+        
         # Normalization
         x_enc = self.normalizer(x=x_enc, mask=mask * input_mask, mode="norm")
         # x_enc = self.normalizer(x=x_enc, mask=input_mask, mode='norm')
@@ -403,6 +563,7 @@ class MOMENT(nn.Module):
             )
         else:
             outputs = self.encoder(inputs_embeds=enc_in, attention_mask=attention_mask)
+        
         enc_out = outputs.last_hidden_state
 
         enc_out = enc_out.reshape((-1, n_channels, n_patches, self.configs.d_model))

@@ -8,6 +8,8 @@ import torch.nn as nn
 import wandb
 from torch import optim
 from wandb import AlertLevel
+import random
+from datetime import datetime
 
 from moment.common import PATHS
 from moment.data.dataloader import get_timeseries_dataloader
@@ -24,8 +26,61 @@ from moment.models.timesnet import TimesNet
 from moment.utils.forecasting_metrics import sMAPELoss
 from moment.utils.optims import LinearWarmupCosineLRScheduler
 from moment.utils.utils import MetricsStore
+from moment.models.tinytimemixer.adapter import TinyTimeMixerAdapter
+from moment.models.tinytimemixer.attempt_02 import AugmentedTTM
+from moment.models.titans.attempt_01 import MAC_Moment
 
 warnings.filterwarnings("ignore")
+
+
+class WrappedLogger():
+    def __init__(
+        self, 
+        task_superclass,
+        use_wandb: bool = True,
+        output_dir: str = None,
+        config: dict = None,
+        project_name: str = "Time-series Foundation Model",
+        name: str = None,
+        notes: str = None,
+    ):
+        self.name = name
+        self.notes = task_superclass.args.notes if notes is None else notes
+        self.use_wandb = use_wandb
+        self.dir = output_dir
+        self.project = project_name
+        # self.config = task_superclass.args
+        
+        if use_wandb:
+            print("Initializing wandb logger")
+            self.logger = wandb.init(
+                project=project_name,
+                dir=output_dir,
+                config=task_superclass.args,
+                name=self.name,
+                notes=task_superclass.args.notes if notes is None else notes,
+                mode="disabled" if task_superclass.args.debug else "run",
+            )
+        else:
+            print("Using dummy logger")
+
+    def log(self, data):
+        if self.use_wandb:
+            self.logger.log(data)
+        else:
+            print(data)
+            
+    def alert(self, title, text, level):
+        if self.use_wandb:
+            self.logger.alert(title, text, level)
+        else:
+            print(f"{title} - {text}")
+    
+    def finish(self):
+        if self.use_wandb:
+            self.logger.finish()
+        else:
+            print("Logger finished")
 
 
 class Tasks(nn.Module):
@@ -34,15 +89,37 @@ class Tasks(nn.Module):
         self.args = args
         self._dataloader = {}
 
+        self.seed = getattr(args, "seed", random.randint(0, 1000000))
+        
+        print(f"Setting seed to {self.seed}")
+        
+        self._set_seed()
+        
         self._build_model()
         self._acquire_device()
 
         # Setup data loaders
+        
+        
+        # Need to reset seed after building model
+        # This is because the model is built using the seed.
+        # So different models will result in different data
+        # unless we reset the seed again.
+        self._set_seed() 
         self.train_dataloader = self._get_dataloader(data_split="train")
         self.test_dataloader = self._get_dataloader(data_split="test")
         self.val_dataloader = self._get_dataloader(data_split="val")
 
+
+    def _set_seed(self):
+        torch.manual_seed(self.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.seed)
+        random.seed(self.seed)
+
     def _build_model(self):
+        self.model_name = self.args.model_name
+        
         if self.args.model_name == "MOMENT":
             self.model = MOMENT(configs=self.args)
         elif self.args.model_name == "DLinear":
@@ -61,8 +138,32 @@ class Tasks(nn.Module):
             self.model = GPT4TS(configs=self.args)
         elif self.args.model_name == "TimesNet":
             self.model = TimesNet(configs=self.args)
+        elif self.args.model_name == "TinyTimeMixer":
+            self.model = TinyTimeMixerAdapter(configs=self.args)
+        elif self.args.model_name == "AugmentedTTM":
+            self.model = AugmentedTTM(config=self.args)
+        elif self.args.model_name == "MACMoment":
+            self.model = MAC_Moment(configs=self.args)
         else:
             raise NotImplementedError(f"Model {self.args.model_name} not implemented")
+        
+        
+        # Get a nice model identifier
+        try:
+            self.total_model_params = sum(p.numel() for p in self.model.parameters())
+            total_params, prefix = sum(p.numel() for p in self.model.parameters()), ""
+        
+            for value in ["K", "M", "B"]:
+                if total_params < 1000:
+                    break
+                total_params /= 1000
+                prefix = value
+            
+            self.model_label = f"{self.model_name} {total_params:.1f}{prefix}"
+        except:
+            self.model_params = 0
+            self.model_label = self.model_name
+        
         return self.model
 
     def _acquire_device(self):
@@ -280,17 +381,51 @@ class Tasks(nn.Module):
         os.makedirs(results_path, exist_ok=True)
         return results_path
 
-    def setup_logger(self, notes: str = None):
-        self.logger = wandb.init(
-            project="Time-series Foundation Model",
-            dir=PATHS.WANDB_DIR,
+    def setup_logger(
+        self, 
+        notes: str = None,
+        project_name: str = "Time-series Foundation Model",
+        output_dir: str | None = None
+    ):
+        
+        current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        if output_dir is None:
+            dir_name = f"{current_datetime}_{self.model_label}"
+            output_dir = os.path.join("runs", dir_name)
+        
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        use_wandb = getattr(self.args, "use_wandb", True)
+        print(f"Using wandb: {use_wandb}")
+        if use_wandb: # Maybe it doesn't work if it initializes inside the wrapped logger
+            self.logger = wandb.init(
+                project="Time-series Foundation Model",
+                dir=output_dir,
+                config=self.args,
+                name=self.args.run_name if hasattr(self.args, "run_name") else self.model_label,
+                notes=self.args.notes if notes is None else notes,
+                mode="disabled" if self.args.debug else "run",
+            )
+        
+        self.wrapped_logger = WrappedLogger(
+            task_superclass=self,
+            project_name=project_name,
+            output_dir=output_dir,
             config=self.args,
-            name=self.args.run_name if hasattr(self.args, "run_name") else None,
+            name=self.args.run_name if hasattr(self.args, "run_name") else self.model_label,
             notes=self.args.notes if notes is None else notes,
-            mode="disabled" if self.args.debug else "run",
+            # mode="disabled" if self.args.debug else "run",
+            use_wandb=False,
         )
         if self.args.debug:
             print(f"Run name: {self.logger.name}\n")
+        
+        print("Saving model to output directory:", output_dir)    
+        
+        with open(os.path.join(output_dir, "model_print.txt"), "w") as f:
+            f.write(str(self.model))
+        
         return self.logger
 
     def end_logger(self):
@@ -364,12 +499,20 @@ class Tasks(nn.Module):
         illegal_grads = (
             illegal_encoder_grads or illegal_head_grads or illegal_patch_embedding_grads
         )
+        
+        zipped_illegal_grads = zip(
+            [illegal_encoder_grads, illegal_head_grads, illegal_patch_embedding_grads], 
+            ["encoder", "head", "patch_embedding"]
+        )
 
-        if illegal_grads:
-            # self.logger.alert(title="Model gradients are NaN or Inf",
-            #                     text=f"Model gradients are NaN or Inf.",
-            #                     level=AlertLevel.INFO)
-            # breakpoint()
-            print("Model gradients are NaN or Inf.")
+        # if illegal_grads:
+        #     # self.logger.alert(title="Model gradients are NaN or Inf",
+        #     #                     text=f"Model gradients are NaN or Inf.",
+        #     #                     level=AlertLevel.INFO)
+        #     # breakpoint()
+            
+        #     grad_flags = [(grad_label, bool(grad_bool)) for grad_bool, grad_label in zipped_illegal_grads]
+            
+        #     print(f"Model gradients are NaN or Inf for {str(grad_flags)}.")
 
         return

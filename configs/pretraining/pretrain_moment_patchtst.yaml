@@ -1,18 +1,29 @@
 #Experiment parameters
 random_seed: 13
-notes: "Pre-training run"
+notes: "Pre-training run with reduced dataset"
 
 # Encoder (MOMENT) parameters
 task_name: "pre-training" 
 
 # Model parameters
+
+
+# MOMENT parameters
 model_name: "MOMENT"
 seq_len: 512
 patch_len: 8
 patch_stride_len: 8
 revin_affine: False
-d_model: null
+d_model: 512
+e_layers: 6
 dropout: 0.1
+attention_dropout: 0.1
+output_attention: False
+n_heads: 8
+d_ff: 2048
+activation: "relu"
+
+
 torch_dtype: "bfloat16"
 value_embedding_bias: False # Whether to add biases to the value embeddings
 orth_gain: 1.41
@@ -20,30 +31,30 @@ add_positional_embedding: False # Wheter to add positional embedding to the inpu
 set_input_mask: True # Whether to set the input mask
 randomly_initialize_backbone: True # Whether to randomly initialize the encoder
 transformer_type: "encoder_only" # "encoder_decoder" "encoder_only" "decoder_only"
-transformer_backbone: 'google/flan-t5-large' # "PatchTST" "google/flan-t5-base" "t5-large"
+transformer_backbone: "PatchTST"
 freeze_transformer_backbone: False # Whether to freeze the transformer backbone
 
+
 # Logging
-log_interval: 100000
-checkpoint_interval: 5000
-debug: False
+log_interval: 500  # Reduced from 100000
+checkpoint_interval: 500  # Reduced from 5000
+debug: True  # Changed from False to True to get more debug information
 
 # Training parameters
 mask_ratio: 0.3
-optimizer_name : "AdamW"
+optimizer_name: AdamW
 enable_gradient_checkpointing: True
-max_norm: 5
-
+max_norm: 1.0
 weight_decay: 0.05
-lr_scheduler_type: 'linearwarmupcosinelr'
-init_lr: 0.0001 # 1e-4
-min_lr: 0.00001 # 1e-5
+lr_scheduler_type: linearwarmupcosinelr
+init_lr: 0.00005
+min_lr: 0.000005
 lr_decay_rate: 0.9
-warmup_lr: 0.00001 # 1e-5
-warmup_steps: 1000
+warmup_lr: 0.000005
+warmup_steps: 200
 use_amp: True
-max_opt_steps: 5000000
-max_epoch: 50
+# max_opt_steps: 5000  # Reduced from 5000000
+max_epoch: 1  # Reduced from 50
 
 # Dataset parameters
 target_col : 'OT'
@@ -59,10 +70,12 @@ pad_mode : "constant"
 pad_constant_values : 0
 dataset_names : 'all'
 datasets_fraction : 1.00
-train_batch_size : 2048 # 1024 2048 3072 4096
-val_batch_size: 3072 # 1024 2048 3072 4096 
+train_batch_size : 512  # Reduced from 2048
+val_batch_size: 768  # Reduced from 3072
 shuffle : True
 num_workers : 5
 pin_memory : True
 drop_last : False
-seed : 42
+seed: 42
+
+use_wandb: False
